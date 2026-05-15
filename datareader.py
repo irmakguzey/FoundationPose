@@ -195,6 +195,20 @@ class Aria2MeshReader:
         else:
             self.H, self.W = self.rgb_images[0].shape[:2]
 
+    def get_first_index(self, object_name):
+        object_masks_dir = self.paths.aria2mesh_object_masks_dir
+
+        # Find the latest mask png file in the object directory
+        # We'll start using the rgb and depth images from the latest mask file
+        object_mask_dir = object_masks_dir / object_name
+        mask_files = list(object_mask_dir.glob("*.png"))
+        if not mask_files:
+            raise ValueError(f"No mask files found in {object_mask_dir}")
+        mask_file = max(mask_files, key=lambda x: int(x.stem))
+        mask_file_name = mask_file.name
+        first_frame_index = int(mask_file_name.split(".")[0])
+        return first_frame_index
+
     def get_video_name(self):
         return self.paths.name
 
@@ -239,6 +253,7 @@ class Aria2MeshReader:
 
     def get_gt_mesh(self):
         mesh_file = self.paths.get_object_mesh_path(self.object_name)
+        # breakpoint()
         mesh = trimesh.load(mesh_file)
         return mesh
 
