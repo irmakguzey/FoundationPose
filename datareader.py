@@ -12,42 +12,10 @@ import os
 import sys
 from pathlib import Path
 
-from scipy.spatial.transform import Rotation
 from Utils import *
-
-from aria2hoi.utils.camera_utils import (
-    adjust_intrinsics,
-    compute_crop_params,
-    crop_resize,
-    reproject_depth,
-)
-from aria2hoi.utils.data_paths_provider import DataPathsProvider
-from aria2hoi.utils.transform_utils import (
-    PYTORCH3D_TO_OPENCV,
-    Z_UP_TO_Y_UP,
-    invert_transform,
-    transform_mesh_to_frame,
-)
 
 BOP_LIST = ["lmo", "tless", "ycbv", "hb", "tudl", "icbin", "itodd"]
 BOP_DIR = os.getenv("BOP_DIR")
-
-
-def _load_params(paths: DataPathsProvider, object_name: str) -> dict:
-    """Load pose params, trying multiple candidate paths."""
-    obj_out_dir = paths.aria2mesh_outputs_dir / object_name
-    candidates = [
-        obj_out_dir / "pose_optimization" / "optimized_params_final.npz",
-        obj_out_dir / "pose_optimization" / "optimized_params_gravity_aligned.npz",
-        obj_out_dir / "params.npz",
-    ]
-    for p in candidates:
-        if p.exists():
-            return dict(np.load(p))
-    raise FileNotFoundError(
-        f"No pose params found for '{object_name}' under {obj_out_dir}. "
-        f"Tried: {[str(c) for c in candidates]}"
-    )
 
 
 def get_bop_reader(video_dir, zfar=np.inf):
@@ -138,7 +106,7 @@ class YcbineoatReader:
             pose = np.loadtxt(self.gt_pose_files[i]).reshape(4, 4)
             return pose
         except:
-            logging.info("GT pose not found, return None")
+            # logging.info("GT pose not found, return None")
             return None
 
     def get_color(self, i):
@@ -192,271 +160,6 @@ class YcbineoatReader:
         YCB_VIDEO_DIR = os.getenv("YCB_VIDEO_DIR")
         mesh = trimesh.load(f"{YCB_VIDEO_DIR}/models/{ob_name}/textured_simple.obj")
         return mesh
-
-
-class Aria2HOIReader:
-    def __init__(
-        self,
-        aria_path: Path,
-        object_name: str,
-        # rgb_images,  # Either numpy array or list of paths
-        # depth_images,  # Either numpy array or list of paths
-        # intrinsics,  # Either numpy array or list of intrinsics
-        # mask=None,  # Either none or cv2 image of the object mask
-        # pose=None,  # Either none or numpy array of the object pose
-        dump_images=False,
-        zfar=np.inf,
-        image_target_size=512,
-    ):
-        self.aria_path = aria_path
-        self.paths = DataPathsProvider(aria_path)
-        with open(self.paths.aria_data_file_path, "rb") as f:
-            data = pickle.load(f)
-        self.frame_data = data["frame_data"]
-        self.object_name = object_name
-        self.dump_images = dump_images
-        self.image_target_size = image_target_size
-
-        # Initialize the data reader
-        # self.rgb_images = rgb_images
-        # self.depth_images = depth_images
-        # self.intrinsics = intrinsics
-        # self.mask = mask
-        # self.pose = pose
-        self.zfar = zfar
-        self.optimized_params = _load_params(self.paths, self.object_name)
-
-        # Get the height and width of the first image
-        self.rgb_w = int(self.frame_data[0]["rgb_camera"]["width"])
-        self.rgb_h = int(self.frame_data[0]["rgb_camera"]["height"])
-
-        # Get the first frame index
-        self.first_mask_file_index, self.last_mask_file_index = (
-            self.get_first_and_last_mask_frame_indices(
-                self.object_name, return_index=True
-            )
-        )
-
-    def get_first_and_last_mask_frame_indices(self, object_name, return_index=False):
-        object_masks_dir = self.paths.aria2mesh_object_masks_dir
-
-        # Find the latest mask png file in the object directory
-        # We'll start using the rgb and depth images from the latest mask file
-        object_mask_dir = object_masks_dir / object_name
-        mask_files = list(object_mask_dir.glob("*.png"))
-        if not mask_files:
-            raise ValueError(f"No mask files found in {object_mask_dir}")
-        last_mask_file = max(mask_files, key=lambda x: int(x.stem))
-        first_mask_file = min(mask_files, key=lambda x: int(x.stem))
-        if return_index:
-            last_mask_file_name = last_mask_file.name
-            first_mask_file_name = first_mask_file.name
-
-            last_mask_file_index = int(last_mask_file_name.split(".")[0])
-            first_mask_file_index = int(first_mask_file_name.split(".")[0])
-            return first_mask_file_index, last_mask_file_index
-
-        return first_mask_file, last_mask_file
-
-    def get_video_name(self):
-        return self.paths.name
-
-    def __len__(self):
-        return len(self.rgb_images)
-
-    def get_mask(self):
-        """
-        Reads the last mask file that was used at aria2mesh, resize and crop it to align with the RGB
-        image, and dump it if dump_images is True.
-        """
-
-        # Load the mask
-        _, mask_path = self.get_first_and_last_mask_frame_indices(self.object_name)
-        mask = cv2.imread(str(mask_path))
-
-        # Resize + crop
-        mask_file_name = mask_path.name
-        mask_index = int(mask_file_name.split(".")[0])
-
-        # Resize + crop
-        rgb_w = int(self.frame_data[mask_index]["rgb_camera"]["width"])
-        rgb_h = int(self.frame_data[mask_index]["rgb_camera"]["height"])
-        crop_x, crop_y, crop_size = compute_crop_params(rgb_w, rgb_h)
-        mask_small = crop_resize(
-            mask, crop_x, crop_y, crop_size, self.image_target_size
-        )
-
-        # Dump the mask if wanted
-        if self.dump_images:
-            os.makedirs(self.paths.init_mask_dir, exist_ok=True)
-            cv2.imwrite(
-                str(self.paths.init_mask_dir / f"mask_{str(mask_index).zfill(8)}.png"),
-                mask_small,
-            )
-
-        # Just take a single channel from the mask
-        if len(mask_small.shape) == 3:
-            for c in range(3):
-                if mask_small[..., c].sum() > 0:
-                    mask_small = mask_small[..., c]
-                    break
-        # Type
-        mask_small = mask_small.astype(bool).astype(np.uint8)
-        return mask_small
-
-    def get_color(self, i):
-        """
-        Reads the rgb image and crops it to a desired size.
-        """
-
-        rgb_w = int(self.frame_data[i]["rgb_camera"]["width"])
-        rgb_h = int(self.frame_data[i]["rgb_camera"]["height"])
-        crop_x, crop_y, crop_size = compute_crop_params(rgb_w, rgb_h)
-
-        fname = f"{i:08d}"
-        rgb_path = self.paths.processed_rgb_dir / f"{fname}.jpg"
-        if not rgb_path.exists():
-            rgb_path = self.paths.processed_rgb_dir / f"{fname}.png"
-        rgb_image = cv2.imread(str(rgb_path))
-        rgb_small = crop_resize(
-            rgb_image, crop_x, crop_y, crop_size, self.image_target_size
-        )
-
-        if self.dump_images:
-            os.makedirs(self.paths.resized_rgb_dir, exist_ok=True)
-            cv2.imwrite(str(self.paths.resized_rgb_dir / f"{fname}.png"), rgb_small)
-
-        return rgb_small
-
-    def get_depth(self, i):
-        """
-        Will read the depth image, transform it to RGB frame and crop it if necessary
-        """
-        fname = f"{i:08d}"
-        depth_path = self.paths.processed_depth_dir / f"{fname}.png"
-
-        # Get the extrinsics and intrinsics
-
-        K_stereo = self.frame_data[i]["stereo_left_camera"]["K"]
-        rgb_to_device = self.get_extrinsics(camera_name="rgb_camera", i=i)
-        stereo_to_device = self.get_extrinsics(camera_name="stereo_left_camera", i=i)
-        stereo_to_rgb = np.linalg.pinv(rgb_to_device) @ stereo_to_device
-        K_rgb_small = self.get_intrinsics(camera_name="rgb_camera", i=i)
-
-        if depth_path.exists():
-            depth_stereo = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
-            depth_rgb = reproject_depth(
-                depth_stereo,
-                K_stereo,
-                K_rgb_small,
-                stereo_to_rgb,
-                self.image_target_size,
-            )
-        else:
-            depth_rgb = np.full(
-                (self.image_target_size, self.image_target_size),
-                np.iinfo(np.uint16).max,
-                dtype=np.uint16,
-            )
-
-        # Will use only the processed depth images
-        # frame_id = i - self.first_frame_index
-        # if isinstance(self.depth_images[frame_id], str):  # It's a file path
-        #     depth = cv2.imread(self.depth_images[frame_id], -1) / 1e3
-        # else:
-        #     depth = self.depth_images[frame_id]
-
-        depth_rgb = depth_rgb.astype(np.float32)
-        depth_rgb /= 1e3
-        depth_rgb[(depth_rgb < 0.001) | (depth_rgb >= self.zfar)] = 0
-        return depth_rgb
-
-    def get_mesh(self):
-        mesh_file = self.paths.get_object_mesh_path(self.object_name)
-        mesh = trimesh.load(mesh_file, force="mesh")
-        # return mesh
-
-        # Convert the up TODO: not sure abt this
-        scale = np.asarray(self.optimized_params["scale"]).reshape(-1)
-        vertices = mesh.vertices
-        vertices = vertices @ Z_UP_TO_Y_UP.T
-        # vertices = vertices @ PYTORCH3D_TO_OPENCV.T
-        vertices = vertices * scale  # broadcasts (1,) scalar or (3,) per-axis
-
-        scaled = mesh.copy()
-        scaled.vertices = vertices.astype(np.float32)
-        return scaled
-
-    def get_mesh_in_world(self):
-        """
-        Returns the gt mesh at world frame
-        """
-        mesh_file = self.paths.get_object_mesh_path(self.object_name)
-        mesh = trimesh.load(mesh_file, force="mesh")
-
-        # Load pose params and T_world_cam0
-        T_world_cam0_path = self.paths.aria2mesh_dir / "inputs" / "c2w_first_view.npy"
-        T_world_cam0 = np.load(str(T_world_cam0_path)).astype(np.float64)
-
-        # Place the mesh in world frame using optimized pose
-        mesh_in_world = transform_mesh_to_frame(
-            mesh, self.optimized_params, T_world_cam0
-        )
-
-        return mesh_in_world
-
-    def get_mesh_in_camera(self, camera_name, i):
-        frame_to_device = self.get_extrinsics(camera_name=camera_name, i=i)
-        device_to_world = self.get_device_to_world(i=i)
-        frame_to_world = device_to_world @ frame_to_device
-
-        mesh_in_world = self.get_mesh_in_world()
-        mesh_in_frame = transform_mesh_to_frame(
-            mesh_in_world, self.optimized_params, np.linalg.pinv(frame_to_world)
-        )
-
-        return mesh_in_frame
-
-    def get_mesh_pose_in_camera(self, camera_name, i):
-        # Load pose params and T_world_cam0
-        T_world_cam0_path = self.paths.aria2mesh_dir / "inputs" / "c2w_first_view.npy"
-        cam0_to_world = np.load(str(T_world_cam0_path)).astype(np.float64)
-
-        cam_to_device = self.get_extrinsics(camera_name=camera_name, i=i)
-        device_to_world = self.get_device_to_world(i=i)
-        cam_to_world = device_to_world @ cam_to_device
-
-        cam0_to_cam = np.linalg.pinv(cam_to_world) @ cam0_to_world
-
-        mesh_to_cam0 = np.eye(4)
-        rot_wxyz = np.asarray(self.optimized_params["rotation"]).reshape(-1)
-        translation = np.asarray(self.optimized_params["translation"]).reshape(-1)
-        rt_mtx = Rotation.from_quat(
-            [rot_wxyz[1], rot_wxyz[2], rot_wxyz[3], rot_wxyz[0]]
-        ).as_matrix()
-        mesh_to_cam0[:3, :3] = PYTORCH3D_TO_OPENCV @ rt_mtx.T
-        mesh_to_cam0[:3, 3] = PYTORCH3D_TO_OPENCV @ translation
-
-        mesh_to_cam = cam0_to_cam @ mesh_to_cam0
-        return mesh_to_cam
-
-    def get_intrinsics(self, camera_name, i):
-        cam_intrinsics = self.frame_data[i][camera_name]["K"]
-        cam_w = int(self.frame_data[i][camera_name]["width"])
-        cam_h = int(self.frame_data[i][camera_name]["height"])
-        crop_x, crop_y, crop_size = compute_crop_params(cam_w, cam_h)
-        adjusted_intrinsics = adjust_intrinsics(
-            cam_intrinsics, crop_x, crop_y, crop_size, self.image_target_size
-        )
-        return adjusted_intrinsics
-
-    def get_extrinsics(self, camera_name, i):
-        camera_to_device = self.frame_data[i][camera_name]["T_device_camera"]
-        return camera_to_device
-
-    def get_device_to_world(self, i):
-        device_to_world = self.frame_data[i]["T_world_device"]
-        return device_to_world
 
 
 class BopBaseReader:
@@ -587,7 +290,7 @@ class BopBaseReader:
                 pos += 1
             mask_file = f"{self.base_dir}/{type}/{name:06d}_{pos:06d}.png"
             if not os.path.exists(mask_file):
-                logging.info(f"{mask_file} not found")
+                # logging.info(f"{mask_file} not found")
                 return None
         else:
             # mask_dir = os.path.dirname(self.color_files[0]).replace('rgb',type)
@@ -901,7 +604,7 @@ class HomebrewedReader(BopBaseReader):
         return mesh_file
 
     def get_gt_pose(self, i_frame: int, ob_id, use_my_correction=False):
-        logging.info("WARN HomeBrewed doesn't have GT pose")
+        # logging.info("WARN HomeBrewed doesn't have GT pose")
         return np.eye(4)
 
 
@@ -942,13 +645,3 @@ class TudlReader(BopBaseReader):
     def get_gt_mesh_file(self, ob_id):
         mesh_file = f"{self.base_dir}/../../../tudl_models/models/obj_{ob_id:06d}.ply"
         return mesh_file
-
-
-if __name__ == "__main__":
-    aria_reader = Aria2HOIReader(
-        aria_path=Path("/nas_archive/irmak/ff-data/aria/sweep_2/recording_1"),
-        object_name="brush",
-        dump_images=True,
-    )
-
-    aria_reader.get_mask()

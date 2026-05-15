@@ -80,19 +80,19 @@ if __name__ == "__main__":
         debug=debug,
         glctx=glctx,
     )
-    logging.info("estimator initialization done")
+    # logging.info("estimator initialization done")
 
     reader = YcbineoatReader(
         video_dir=args.test_scene_dir, shorter_side=None, zfar=np.inf
     )
 
     for i in range(len(reader.color_files)):
-        logging.info(f"i:{i}")
+        # logging.info(f"i:{i}")
         color = reader.get_color(i)
         depth = reader.get_depth(i)
         if i == 0:
             if args.initial_pose is not None:
-                logging.info("Using provided initial pose; skipping pose optimisation.")
+                # logging.info("Using provided initial pose; skipping pose optimisation.")
                 init_pose = load_initial_pose(args.initial_pose)
                 # Input is ob_in_cam wrt the original mesh origin (as in the .obj/.glb file).
                 # Internally pose_last is wrt the centered mesh (vertices shifted by -model_center),
