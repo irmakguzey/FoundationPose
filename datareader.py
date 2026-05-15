@@ -195,6 +195,9 @@ class Aria2MeshReader:
         else:
             self.H, self.W = self.rgb_images[0].shape[:2]
 
+        # Get the first frame index
+        self.first_frame_index = self.get_first_index(self.object_name)
+
     def get_first_index(self, object_name):
         object_masks_dir = self.paths.aria2mesh_object_masks_dir
 
@@ -216,14 +219,15 @@ class Aria2MeshReader:
         return len(self.rgb_images)
 
     def get_color(self, i):
-        if isinstance(self.rgb_images[i], str):  # It's a file path
-            color = cv2.imread(self.rgb_images[i])
+        frame_id = i - self.first_frame_index
+        if isinstance(self.rgb_images[0], str):  # It's a file path
+            color = cv2.imread(self.rgb_images[frame_id])
         else:
-            color = self.rgb_images[i]
+            color = self.rgb_images[frame_id]
         color = cv2.resize(color, (self.W, self.H), interpolation=cv2.INTER_NEAREST)
         return color
 
-    def get_mask(self, i):
+    def get_mask(self):
         if isinstance(self.mask, str):  # It's a file path
             mask = cv2.imread(self.mask, -1)
         else:
@@ -242,10 +246,11 @@ class Aria2MeshReader:
         return mask
 
     def get_depth(self, i):
-        if isinstance(self.depth_images[i], str):  # It's a file path
-            depth = cv2.imread(self.depth_images[i], -1) / 1e3
+        frame_id = i - self.first_frame_index
+        if isinstance(self.depth_images[frame_id], str):  # It's a file path
+            depth = cv2.imread(self.depth_images[frame_id], -1) / 1e3
         else:
-            depth = self.depth_images[i]
+            depth = self.depth_images[frame_id]
 
         depth = cv2.resize(depth, (self.W, self.H), interpolation=cv2.INTER_NEAREST)
         depth[(depth < 0.001) | (depth >= self.zfar)] = 0
@@ -258,7 +263,8 @@ class Aria2MeshReader:
         return mesh
 
     def get_intrinsics(self, i):
-        return self.intrinsics(i)
+        frame_id = i - self.first_frame_index
+        return self.intrinsics[frame_id]
 
 
 class BopBaseReader:
