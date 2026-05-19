@@ -343,6 +343,7 @@ def nvdiffrast_render(
 
 
 def set_seed(random_seed):
+    import os
     import random
 
     import torch
@@ -353,6 +354,18 @@ def set_seed(random_seed):
     torch.cuda.manual_seed_all(random_seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    # Deterministic atomics (scatter/reduce) and cuBLAS workspace.
+    # warn_only=True avoids hard errors from ops that have no deterministic
+    # implementation; flip to False to be strict.
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    # Seed Open3D's internal RNG (available in Open3D >= 0.16).
+    try:
+        import open3d as o3d
+
+        o3d.utility.random.seed(random_seed)
+    except AttributeError:
+        pass  # older Open3D – best-effort
 
 
 def add_err(pred, gt, model_pts, symetry_tfs=np.eye(4)[None]):
