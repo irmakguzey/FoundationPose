@@ -135,7 +135,6 @@ class FoundationPose:
 
     def make_rotation_grid(self, min_n_views=40, inplane_step=60):
         cam_in_obs = sample_views_icosphere(n_views=min_n_views)
-        # # logging.info(f"cam_in_obs:{cam_in_obs.shape}")
         rot_grid = []
         for i in range(len(cam_in_obs)):
             for inplane_rot in np.deg2rad(np.arange(0, 360, inplane_step)):
@@ -146,14 +145,11 @@ class FoundationPose:
                 rot_grid.append(ob_in_cam)
 
         rot_grid = np.asarray(rot_grid)
-        # # logging.info(f"rot_grid:{rot_grid.shape}")
         rot_grid = mycpp.cluster_poses(
             30, 99999, rot_grid, self.symmetry_tfs.data.cpu().numpy()
         )
         rot_grid = np.asarray(rot_grid)
-        # # logging.info(f"after cluster, rot_grid:{rot_grid.shape}")
         self.rot_grid = torch.as_tensor(rot_grid, device="cuda", dtype=torch.float)
-        # # logging.info(f"self.rot_grid: {self.rot_grid.shape}")
 
     def generate_random_pose_hypo(self, K, rgb, depth, mask, scene_pts=None):
         """
@@ -192,12 +188,10 @@ class FoundationPose:
         @pts: (N,3) np array, downsampled scene points
         """
         set_seed(self.seed)
-        # # logging.info("Welcome")
 
         if self.glctx is None:
             if glctx is None:
                 self.glctx = dr.RasterizeCudaContext()
-                # self.glctx = dr.RasterizeGLContext()
             else:
                 self.glctx = glctx
 
@@ -235,14 +229,12 @@ class FoundationPose:
             K=K, rgb=rgb, depth=depth, mask=ob_mask, scene_pts=None
         )
         poses = poses.data.cpu().numpy()
-        # # logging.info(f"poses:{poses.shape}")
         center = self.guess_translation(depth=depth, mask=ob_mask, K=K)
 
         poses = torch.as_tensor(poses, device="cuda", dtype=torch.float)
         poses[:, :3, 3] = torch.as_tensor(center.reshape(1, 3), device="cuda")
 
         add_errs = self.compute_add_err_to_gt_pose(poses)
-        # # logging.info(f"after viewpoint, add_errs min:{add_errs.min()}")
 
         xyz_map = depth2xyzmap(depth, K)
         poses, vis = self.refiner.predict(
