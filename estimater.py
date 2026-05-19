@@ -28,12 +28,14 @@ class FoundationPose:
         glctx=None,
         debug=0,
         debug_dir="/home/bowen/debug/novel_pose_debug/",
+        seed: int = 0,
     ):
 
         # print("inside FP init")
         self.gt_pose = None
         self.ignore_normal_flip = True
         self.debug = debug
+        self.seed = seed
         self.debug_dir = debug_dir
         os.makedirs(debug_dir, exist_ok=True)
 
@@ -189,7 +191,7 @@ class FoundationPose:
         """Copmute pose from given pts to self.pcd
         @pts: (N,3) np array, downsampled scene points
         """
-        set_seed(0)
+        set_seed(self.seed)
         # # logging.info("Welcome")
 
         if self.glctx is None:
